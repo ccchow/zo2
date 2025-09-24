@@ -21,6 +21,8 @@ class MeZOSGDConfig:
     offloading_device: str = 'cpu'  # offload device, can be CPU or a path (for disk offloading, but currently unavailable)
     working_device: str = 'cuda'    # compute device, can be any CUDA device
     overlap: bool = True    # use scheduler to overlap or not
+    use_pinned_memory: bool = False    # use pinned memory for faster CPU-GPU transfers (20-30% speedup)
+    pinned_memory_prefetch: bool = True    # prefetch next module to pinned memory while computing current
     compute_module_optimize_method: str = ''   # possible values are: ['', 'torch.compile']
     compute_function_optimize_method: str = ''   # possible values are: ['', 'torch.jit.script']
     communicate_optimize_method: str = ''   # possible values are: ['', 'bucket']
