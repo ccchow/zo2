@@ -285,6 +285,13 @@ class MeZO2SGD(MeZOSGD):
             nvlink_map=self.nvlink_map
         )
 
+        # Convert model to stage_io_dtype if specified
+        if hasattr(self, 'stage_io_dtype') and self.stage_io_dtype:
+            dtype_map = {'bf16': torch.bfloat16, 'fp16': torch.float16, 'fp32': torch.float32}
+            target_dtype = dtype_map.get(self.stage_io_dtype, torch.float32)
+            print(f"Converting model to {self.stage_io_dtype} ({target_dtype})...")
+            self.model = self.model.to(dtype=target_dtype)
+
         # Now distribute the actual model layers (model-specific, will be overridden)
         self.distribute_model_layers()
 
