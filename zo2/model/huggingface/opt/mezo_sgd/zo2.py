@@ -440,6 +440,8 @@ class OptimizerOPTDecoder(MeZO2SGD):
             self.rstate_queue = None
             self.last_rstate = None
             self.projected_grad = None
+            # Still need to upload embeddings and distribute layers!
+            self.init_zo2_upload()
 
     def init_zo2_upload(self):
         """
