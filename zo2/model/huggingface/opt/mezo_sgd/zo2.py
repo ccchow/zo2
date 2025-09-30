@@ -465,12 +465,13 @@ class OptimizerOPTDecoder(MeZO2SGD):
             if self.model.project_in:
                 self.model.project_in = self.model.project_in.to(embed_device)
 
-            # Place output projections on last stage
-            last_device = self.stage_devices[-1]
+            # Place output projections and norms on lm_head stage (not last stage!)
+            # This is critical because final_layer_norm is applied before lm_head
+            lm_head_device = self.stage_devices[self.lm_head_device_stage]
             if self.model.project_out:
-                self.model.project_out = self.model.project_out.to(last_device)
+                self.model.project_out = self.model.project_out.to(lm_head_device)
             if self.model.final_layer_norm:
-                self.model.final_layer_norm = self.model.final_layer_norm.to(last_device)
+                self.model.final_layer_norm = self.model.final_layer_norm.to(lm_head_device)
 
             # Distribute transformer layers across stages
             print(f"\nDistributing {len(self.model.layers)} transformer layers across {self.num_gpus} GPUs:")
