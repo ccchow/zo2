@@ -373,16 +373,23 @@ class MeZO2SGD(MeZOSGD):
                 # Move inputs to embed device
                 input_ids_dev = input_ids.to(embed_device)
 
-                # Get embeddings (model-specific, assuming OPT-like structure)
-                if hasattr(self.model, 'decoder'):
+                # Get embeddings (model-specific)
+                decoder = None
+                if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'embed_tokens'):
+                    # OPTDecoder, Qwen3Decoder, etc.
                     decoder = self.model.decoder
+                elif hasattr(self.model, 'model') and hasattr(self.model.model, 'decoder') and hasattr(self.model.model.decoder, 'embed_tokens'):
+                    # OPTForCausalLM, Qwen3ForCausalLM, etc.
+                    decoder = self.model.model.decoder
+
+                if decoder is not None:
                     hidden_states = decoder.embed_tokens(input_ids_dev)
                     if hasattr(decoder, 'embed_positions'):
                         positions = decoder.embed_positions(input_ids_dev)
                         hidden_states = hidden_states + positions
                 else:
-                    # Fallback for different model structures
-                    hidden_states = self.model.get_input_embeddings()(input_ids_dev)
+                    # Fallback for different model structures (not tested)
+                    raise NotImplementedError(f"Embedding access not implemented for {type(self.model).__name__}")
 
                 # Convert to pipeline I/O dtype
                 hidden_states = hidden_states.to(io_dtype)
@@ -407,19 +414,28 @@ class MeZO2SGD(MeZOSGD):
                     # Process layers on this stage
                     stage_layers = self.stage_layers[stage_idx] if hasattr(self, 'stage_layers') else []
 
+                    # Find decoder with layers
+                    decoder = None
+                    if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'layers'):
+                        decoder = self.model.decoder
+                    elif hasattr(self.model, 'model') and hasattr(self.model.model, 'decoder') and hasattr(self.model.model.decoder, 'layers'):
+                        decoder = self.model.model.decoder
+
+                    if decoder is None:
+                        raise NotImplementedError(f"Layer access not implemented for {type(self.model).__name__}")
+
                     for layer_id in stage_layers:
-                        if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'layers'):
-                            layer = self.model.decoder.layers[layer_id]
+                        layer = decoder.layers[layer_id]
 
-                            # Upload layer if offloaded (per-GPU CPU offloading)
-                            if layer.parameters().__next__().device.type == 'cpu':
-                                layer = layer.to(stage_device)
+                        # Upload layer if offloaded (per-GPU CPU offloading)
+                        if layer.parameters().__next__().device.type == 'cpu':
+                            layer = layer.to(stage_device)
 
-                            hidden_states = layer(hidden_states)[0]  # OPT returns tuple
+                        hidden_states = layer(hidden_states)[0]  # OPT/Qwen3 returns tuple
 
-                            # Offload layer if CPU offloading enabled per GPU
-                            if self.enable_cpu_offloading_per_gpu:
-                                layer.cpu()
+                        # Offload layer if CPU offloading enabled per GPU
+                        if self.enable_cpu_offloading_per_gpu:
+                            layer.cpu()
 
                     # Async transfer to next stage
                     if stage_idx < len(self.stage_devices) - 1:
@@ -442,9 +458,14 @@ class MeZO2SGD(MeZOSGD):
                     hidden_states = hidden_states.to(lm_head_device)
 
                 # Apply final layer norm if present
+                decoder = None
                 if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'final_layer_norm'):
-                    if self.model.decoder.final_layer_norm is not None:
-                        hidden_states = self.model.decoder.final_layer_norm(hidden_states)
+                    decoder = self.model.decoder
+                elif hasattr(self.model, 'model') and hasattr(self.model.model, 'decoder') and hasattr(self.model.model.decoder, 'final_layer_norm'):
+                    decoder = self.model.model.decoder
+
+                if decoder is not None and decoder.final_layer_norm is not None:
+                    hidden_states = decoder.final_layer_norm(hidden_states)
 
                 # Project to vocabulary
                 if hasattr(self.model, 'lm_head'):
