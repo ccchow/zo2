@@ -28,7 +28,11 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from transformers.utils import logging
 
-from typing import List, Optional, Tuple, Union, Unpack
+from typing import List, Optional, Tuple, Union
+try:
+    from typing import Unpack
+except ImportError:
+    from typing_extensions import Unpack
 
 from ....base import BaseZOModel
 from .....optimizer.mezo_sgd.zo2 import MeZO2SGD
