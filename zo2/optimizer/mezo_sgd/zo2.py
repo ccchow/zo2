@@ -278,7 +278,7 @@ class MeZO2SGD(MeZOSGD):
         # (e.g., OptimizerOPTDecoder) that know the model structure
         pass
 
-    def pipeline_forward(self, input_ids, labels=None, **kwargs):
+    def pipeline_forward(self, input_ids, labels=None, apply_perturbation=False, perturbation_sign=+1, **kwargs):
         """
         Forward-only pipeline parallelism for ZO2/MeZO.
 
@@ -291,17 +291,20 @@ class MeZO2SGD(MeZOSGD):
         Args:
             input_ids: Input token IDs [batch_size, seq_len]
             labels: Labels for loss computation [batch_size, seq_len]
+            apply_perturbation: Whether to apply ZO perturbations to parameters
+            perturbation_sign: Sign of perturbation (+1 or -1) for MeZO two-pass
             **kwargs: Additional forward arguments
 
         Returns:
             Loss tensor (scalar)
 
         Note:
-            This implements the core MeZO two-pass evaluation:
-            1. Apply +ε perturbation, run forward pipeline → loss_plus
-            2. Apply −ε perturbation, run forward pipeline → loss_minus
-            3. Compute gradient estimate: coef = (loss_plus - loss_minus) / (2ε)
-            4. Update parameters: p.add_(u, alpha=−η·coef)
+            This implements ONE pass of the MeZO two-pass evaluation.
+            Called twice by inner_zo_forward():
+            1. Call with perturbation_sign=+1 → loss_plus
+            2. Call with perturbation_sign=-1 → loss_minus
+            3. Gradient estimate: coef = (loss_plus - loss_minus) / (2ε)
+            4. Parameter update: p.add_(u, alpha=−η·coef)
         """
         if not self.pipeline_parallel or self.num_gpus == 1:
             # Single-GPU fallback

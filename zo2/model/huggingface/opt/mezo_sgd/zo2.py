@@ -421,37 +421,86 @@ class OPTForQuestionAnswering(modeling_opt.OPTForQuestionAnswering, OPTPreTraine
 class OptimizerOPTDecoder(MeZO2SGD):
 
     def init_zo2(self):
-        self.upload_stream = None
-        self.offload_stream = None
-        self.compute_stream = None
-        self.zo_random_seed = None
-        self.rstate = None
-        self.rstate_queue = None
-        self.last_rstate = None
-        self.projected_grad = None
-        self.init_zo2_upload()
-    
-    def init_zo2_upload(self):
-        self.model.embed_tokens = self.model.embed_tokens.to(self.device)
-        self.model.embed_positions = self.model.embed_positions.to(self.device)
-        if self.model.project_out:
-            self.model.project_out = self.model.project_out.to(self.device)
-        if self.model.project_in:
-            self.model.project_in = self.model.project_in.to(self.device)
-        if self.model.final_layer_norm:
-            self.model.final_layer_norm = self.model.final_layer_norm.to(self.device)
-        self.num_blocks = len(self.model.layers)
-        if self.offloading_blocks is not None:
-            self.offloading_blocks = self.offloading_blocks
+        # Single-GPU mode: initialize streams on working device
+        if not self.pipeline_parallel or self.num_gpus == 1:
+            self.upload_stream = None
+            self.offload_stream = None
+            self.compute_stream = None
+            self.zo_random_seed = None
+            self.rstate = None
+            self.rstate_queue = None
+            self.last_rstate = None
+            self.projected_grad = None
+            self.init_zo2_upload()
         else:
-            self.offloading_blocks = list(range(self.num_blocks))
-        print(f"Transformer blocks {self.offloading_blocks} will be offloaded to {self.offloading_device}")
-        for i in range(self.num_blocks):
-            if i in self.offloading_blocks:
-                continue
+            # Multi-GPU pipeline mode: initialize per-device streams
+            # Note: streams are initialized in parent MeZO2SGD.init_zo2()
+            self.zo_random_seed = None
+            self.rstate = None
+            self.rstate_queue = None
+            self.last_rstate = None
+            self.projected_grad = None
+
+    def init_zo2_upload(self):
+        """
+        Upload embeddings/projections/norms and distribute transformer layers.
+        For multi-GPU: layers are distributed to stage devices per sharding plan.
+        For single-GPU: layers are offloaded to CPU per offloading_blocks config.
+        """
+        if self.pipeline_parallel and self.num_gpus > 1:
+            # Multi-GPU mode: distribute components based on sharding plan
+            # embed_tokens and embed_positions go to embedding stage device
+            embed_device = self.stage_devices[self.embed_device_stage]
+            self.model.embed_tokens = self.model.embed_tokens.to(embed_device)
+            self.model.embed_positions = self.model.embed_positions.to(embed_device)
+
+            # project_in/project_out/final_layer_norm go to appropriate stages
+            # For simplicity, place on first stage (can optimize later)
+            if self.model.project_in:
+                self.model.project_in = self.model.project_in.to(embed_device)
+
+            # Place output projections on last stage
+            last_device = self.stage_devices[-1]
+            if self.model.project_out:
+                self.model.project_out = self.model.project_out.to(last_device)
+            if self.model.final_layer_norm:
+                self.model.final_layer_norm = self.model.final_layer_norm.to(last_device)
+
+            # Distribute transformer layers across stages
+            print(f"\nDistributing {len(self.model.layers)} transformer layers across {self.num_gpus} GPUs:")
+            for stage_idx, (device, layer_ids) in enumerate(zip(self.stage_devices, self.stage_layers)):
+                print(f"  Stage {stage_idx} ({device}): Layers {layer_ids}")
+                for layer_id in layer_ids:
+                    # Initially place on CPU if CPU offloading is enabled per GPU
+                    if self.enable_cpu_offloading_per_gpu:
+                        self.model.layers[layer_id] = self.model.layers[layer_id].cpu()
+                    else:
+                        self.model.layers[layer_id] = self.model.layers[layer_id].to(device)
+
+            print(f"  embed_tokens + embed_positions on Stage {self.embed_device_stage}")
+            print(f"  Output projections/norms on Stage {len(self.stage_devices)-1}")
+        else:
+            # Single-GPU mode: original CPU offloading behavior
+            self.model.embed_tokens = self.model.embed_tokens.to(self.device)
+            self.model.embed_positions = self.model.embed_positions.to(self.device)
+            if self.model.project_out:
+                self.model.project_out = self.model.project_out.to(self.device)
+            if self.model.project_in:
+                self.model.project_in = self.model.project_in.to(self.device)
+            if self.model.final_layer_norm:
+                self.model.final_layer_norm = self.model.final_layer_norm.to(self.device)
+            self.num_blocks = len(self.model.layers)
+            if self.offloading_blocks is not None:
+                self.offloading_blocks = self.offloading_blocks
             else:
-                self.model.layers[i] = self.model.layers[i].to(self.device)
-                print(f"Upload block {i} to {self.device}.")
+                self.offloading_blocks = list(range(self.num_blocks))
+            print(f"Transformer blocks {self.offloading_blocks} will be offloaded to {self.offloading_device}")
+            for i in range(self.num_blocks):
+                if i in self.offloading_blocks:
+                    continue
+                else:
+                    self.model.layers[i] = self.model.layers[i].to(self.device)
+                    print(f"Upload block {i} to {self.device}.")
         
     @torch.inference_mode
     def inner_zo_forward(
@@ -1020,7 +1069,17 @@ class OptimizerOPTModel(MeZO2SGD):
 class OptimizerOPTForCausalLM(MeZO2SGD):
 
     def init_zo2_upload(self):
-        self.model.lm_head = self.model.lm_head.to(self.device)
+        """
+        Upload lm_head to appropriate device.
+        For multi-GPU: placed on lm_head stage device (co-located with embed if tied).
+        For single-GPU: placed on working device.
+        """
+        if self.pipeline_parallel and self.num_gpus > 1:
+            lm_head_device = self.stage_devices[self.lm_head_device_stage]
+            self.model.lm_head = self.model.lm_head.to(lm_head_device)
+            print(f"  lm_head on Stage {self.lm_head_device_stage} ({lm_head_device})")
+        else:
+            self.model.lm_head = self.model.lm_head.to(self.device)
     
     @torch.inference_mode
     def inner_zo_forward(
@@ -1038,9 +1097,24 @@ class OptimizerOPTForCausalLM(MeZO2SGD):
         **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         """
-            copy the original forward code and replace all 'self' to 'self.model'.
+        ZO forward pass for OPT CausalLM.
+        Routes to pipeline_forward() for multi-GPU mode, or single-GPU path.
         """
+        # Multi-GPU pipeline mode: use pipeline_forward()
+        if self.pipeline_parallel and self.num_gpus > 1:
+            # MeZO two-pass: run pipeline twice with +ε and -ε perturbations
+            # Note: In single-GPU mode, both passes run together in one dual forward.
+            # In multi-GPU pipeline mode, we run two separate forward passes sequentially.
+            #
+            # First pass: +ε perturbation (self.projected_grad will be positive coefficient)
+            loss1 = self.pipeline_forward(input_ids, labels, apply_perturbation=True, perturbation_sign=+1, **kwargs)
 
+            # Second pass: -ε perturbation (self.projected_grad will be negative coefficient)
+            loss2 = self.pipeline_forward(input_ids, labels, apply_perturbation=True, perturbation_sign=-1, **kwargs)
+
+            return loss1, loss2
+
+        # Single-GPU mode: original implementation
         output_attentions = output_attentions if output_attentions is not None else self.model.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.model.config.output_hidden_states
@@ -1075,7 +1149,7 @@ class OptimizerOPTForCausalLM(MeZO2SGD):
                     self.task_compute_function(pre_hook_fn,
                         inputs1={"self": self.model, "input_ids": input_ids, "logits": logits1, "labels": labels},
                         inputs2={"self": self.model, "input_ids": input_ids, "logits": logits2, "labels": labels})
-        
+
         # loss = None
         if self.model.zo_custom_train_loss_fn:
             loss1, loss2 = self.task_compute_function(self.model.zo_custom_train_loss_fn,
