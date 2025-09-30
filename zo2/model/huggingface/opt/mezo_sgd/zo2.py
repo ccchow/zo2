@@ -421,6 +421,15 @@ class OPTForQuestionAnswering(modeling_opt.OPTForQuestionAnswering, OPTPreTraine
 class OptimizerOPTDecoder(MeZO2SGD):
 
     def init_zo2(self):
+        # Single-GPU mode: initialize streams locally
+        if not self.pipeline_parallel or self.num_gpus == 1:
+            self.upload_stream = None
+            self.offload_stream = None
+            self.compute_stream = None
+        else:
+            # Multi-GPU pipeline mode: initialize per-device streams
+            self.init_multi_gpu_streams()
+
         # Initialize common state
         self.zo_random_seed = None
         self.rstate = None
@@ -428,11 +437,8 @@ class OptimizerOPTDecoder(MeZO2SGD):
         self.last_rstate = None
         self.projected_grad = None
 
-        # Single-GPU mode: initialize streams locally
+        # Setup multi-GPU sharding or single-GPU upload
         if not self.pipeline_parallel or self.num_gpus == 1:
-            self.upload_stream = None
-            self.offload_stream = None
-            self.compute_stream = None
             # Upload embeddings and setup offloading
             self.init_zo2_upload()
         else:
