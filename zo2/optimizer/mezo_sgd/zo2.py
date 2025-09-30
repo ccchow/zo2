@@ -199,12 +199,27 @@ class MeZO2SGD(MeZOSGD):
             print_pipeline_summary
         )
 
-        # Get model layers (this will be model-specific, handled in subclass)
-        # For now, store configuration that will be used by model-specific implementation
-        num_layers = len(self.model.decoder.layers) if hasattr(self.model, 'decoder') else 0
+        # Get model layers (try different model structures)
+        num_layers = 0
+        decoder_model = None
 
-        if num_layers == 0:
+        if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'layers'):
+            # OPTDecoder, Qwen3Decoder, etc.
+            decoder_model = self.model.decoder
+            num_layers = len(decoder_model.layers)
+        elif hasattr(self.model, 'model') and hasattr(self.model.model, 'decoder') and hasattr(self.model.model.decoder, 'layers'):
+            # OPTForCausalLM, Qwen3ForCausalLM, etc.
+            decoder_model = self.model.model.decoder
+            num_layers = len(decoder_model.layers)
+        elif hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'h'):
+            # GPT-2 style models
+            decoder_model = self.model.transformer
+            num_layers = len(decoder_model.h)
+
+        if num_layers == 0 or decoder_model is None:
             print("Warning: Could not determine number of layers for multi-GPU sharding")
+            print(f"  Model type: {type(self.model).__name__}")
+            print(f"  Available attributes: {[a for a in dir(self.model) if not a.startswith('_')][:10]}")
             return
 
         # Profile layers if using auto distribution
@@ -213,7 +228,7 @@ class MeZO2SGD(MeZOSGD):
             print("Profiling layers for compute-balanced distribution...")
             try:
                 layer_times = profile_layer_compute_time(
-                    model=self.model.decoder if hasattr(self.model, 'decoder') else self.model,
+                    model=decoder_model,
                     layer_ids=list(range(min(num_layers, 10))),  # Profile first 10 layers as sample
                     device=self.stage_devices[0],
                     seq_len=128,
