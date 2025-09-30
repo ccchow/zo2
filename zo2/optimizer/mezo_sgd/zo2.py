@@ -203,7 +203,11 @@ class MeZO2SGD(MeZOSGD):
         num_layers = 0
         decoder_model = None
 
-        if hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'layers'):
+        if hasattr(self.model, 'layers'):
+            # Direct access: wrapped OPTDecoder, Qwen3Decoder (when OptimizerOPTDecoder wraps them)
+            decoder_model = self.model
+            num_layers = len(decoder_model.layers)
+        elif hasattr(self.model, 'decoder') and hasattr(self.model.decoder, 'layers'):
             # OPTDecoder, Qwen3Decoder, etc.
             decoder_model = self.model.decoder
             num_layers = len(decoder_model.layers)
