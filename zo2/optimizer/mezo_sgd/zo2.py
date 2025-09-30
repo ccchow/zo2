@@ -392,7 +392,7 @@ class MeZO2SGD(MeZOSGD):
                         # OPT's embed_positions needs attention_mask, not input_ids
                         # Create attention mask (1 for all tokens, 0 for padding)
                         attention_mask = torch.ones_like(input_ids_dev)
-                        positions = decoder.embed_positions(attention_mask, past_seen_tokens=0)
+                        positions = decoder.embed_positions(attention_mask, past_key_values_length=0)
                         hidden_states = hidden_states + positions
                 else:
                     # Fallback for different model structures (not tested)
