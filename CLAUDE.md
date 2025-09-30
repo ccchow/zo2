@@ -11,7 +11,7 @@ Track task backlog via notion tool in notion database ZO2 AI Agent Investigation
 ## GPU Environment Access
 
 ### SSH Key Authentication (Configured)
-SSH key authentication is now configured for passwordless access:
+SSH key authentication is now configured for passwordless access. Fallback to password `Test_2024` in case of failure.
 
 ```bash
 # Direct connection

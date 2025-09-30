@@ -21,8 +21,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from zo2.config import ZOConfig
-from zo2.model.hf_opt import opt_init_fn
-from zo2.trainer import zo_hf_init
+from zo2.model.huggingface.opt import opt_init_fn
+from zo2.model.huggingface import zo_hf_init
 
 def get_memory_stats() -> Dict[str, float]:
     """Get current GPU and CPU memory usage."""

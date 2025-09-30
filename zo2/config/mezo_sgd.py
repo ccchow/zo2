@@ -3,6 +3,7 @@
 
 import torch
 from dataclasses import dataclass
+from typing import List, Optional
 
 @dataclass
 class MeZOSGDConfig:
@@ -31,6 +32,20 @@ class MeZOSGDConfig:
     precision_on_offloading_device: torch.dtype = torch.float16 # precision on offloading device, valid when using amp
     precision_on_working_device: torch.dtype = torch.float32    # precision on working device, valid when using amp
     amp_compress_method: str = 'naive'  # currently only support naive amp compress, valid when using amp
+
+    # multi-GPU pipeline parallelism config
+    num_gpus: int = 1    # number of GPUs to use (1 = single GPU mode)
+    pipeline_parallel: bool = False    # enable pipeline parallelism across GPUs
+    gpu_devices: Optional[List[str]] = None    # explicit GPU device list, e.g., ['cuda:0', 'cuda:1', 'cuda:2', 'cuda:3']
+    layer_distribution: str = 'auto'    # strategy: 'balanced' (equal layer counts), 'auto' (compute-balanced), 'custom'
+    custom_layer_split: Optional[List[int]] = None    # custom layer boundaries per GPU, e.g., [10, 20, 30] for 4 GPUs
+    micro_batches: int = 16    # number of micro-batches for pipeline (>=12 for 4 stages to keep bubble <20%)
+    pipeline_schedule: str = 'forward_fill_drain'    # GPipe-style forward-only scheduling for ZO2
+    tie_word_embeddings: bool = True    # if True, enforce embed_tokens and lm_head co-location
+    stage_io_dtype: str = 'bf16'    # dtype for inter-stage hidden state transfers ('bf16' or 'fp16'), Ampere supports bf16
+    enable_cpu_offloading_per_gpu: bool = True    # still use CPU offload within each GPU pipeline stage
+    p2p_backend: str = 'nccl'    # backend for stage-to-stage communication ('nccl' recommended)
+    p2p_overlap: bool = True    # use separate transfer stream + events for overlapped P2P transfers
 
     # debug
     debug_mode: bool = False    # set 'True' to disable random noise
